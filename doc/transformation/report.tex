@@ -1,0 +1,1254 @@
+\documentclass[a4paper,11pt]{scrartcl}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{pst-all}
+
+\begin{document}
+
+\title{Report on CLiX}
+\author{Stephan Frank\thanks{173\,357, \protect\url{sfrank@acm.org}}
+  \and
+  Pierre Mai \thanks{178\,178, \protect\url{pmai@acm.org}}}
+\maketitle
+\tableofcontents
+
+\section{Introduction and Goals}
+
+The rise of the Internet during the last decade brought the SGML
+approach to the data representation problem to the attention of most
+programmers and has (in the form of XML) gained increasing acceptance
+and use in document as well as in inter-program data exchange.
+Since XML as a meta-language doesn't proscribe specific data formats,
+but only standardises the methods to define application-specific data
+formats, there is a constantly increasing need to transform data
+between different (possibly XML-based) representations.  Hence there
+has been increasing demand for general-purpose transformation tools
+that ease the task of writing specific transformations.
+
+Since XML is a descendant of SGML, which was originally intended for
+the representation of documents, transformation is often placed in the
+context of document presentation or delivery, i.e. as part of the
+process of presenting a document to the user in a specific
+presentation format (like HTML, PostScript, etc.).  Hence
+transformation was often implemented as part of a larger style-sheet
+language like e.g. DSSSL or XSL.
+
+Furthermore the SGML community has traditionally seen style-sheet
+writing as being the domain of layout professionals, which therefore
+shouldn't require profound programming knowledge. This was one of the
+driving forces behind the creation of specialised transformation
+languages, since standard programming languages where deemed both too
+low-level and too complex to allow non-programmers to specify layout
+rules for documents.
+
+We believe that the resulting approach to designing special-purpose
+transformation languages has resulted in languages that are either too
+limited to describe easily more complex forms of transformation, or
+are so
+%
+%%% TO DO:  Integrate above and below paragraphs...
+%
+%The goal of this project was to develop a tool for XML document
+%transformation not as separate language (like XSLT does), but
+%integrated into a standard programming language. The original idea
+%behind the development for abstract transformation languages was to
+%give non-programmers the ability to define their own transformations
+%(e.g. to implement layout transformation and for style-sheet design)
+%without having to learn an industrial strength programming language.
+%
+complex that they are not applicable by ordinary users (i.e.
+non-programmers). But why should a programmer have to switch to a
+different programming language to complete his/her document
+transformation task? Thus it was decided to develop a transformation
+tool that integrates into a standard programming language eliminating
+the need for use of external languages and thus enabling access to
+support libraries of the standard language(s). The main goal was to
+develop a tool for XML document transformation. It is of course
+possible to transform every tree-structure that implements our
+node-interface, but transformation of every possible tree-structure
+should, from our point of view, not be the main purpose of this tool,
+since it is our understanding that most usability advantages rise from
+specialised tools and thus XML transformation should be the most
+important (and probably only) target.
+
+We decided to implement and integrate our transformation tool into
+Common Lisp \cite{ANSI}. This decision was based on several key
+advantages that Common Lisp (CL) offers in the area of language
+development:
+
+The first and most important aspect is Common Lisp's strong support
+for language expansion and integration, through its meta-linguistic
+features like its macro system, its extensible reader, the regularity
+of its surface syntax, the presence of the compiler at runtime, and
+its powerful object system.  This works especially well in combination
+with Common Lisp's equally strong support for rapid prototyping, with
+features like incremental compilation, its interactive read-eval-print
+loop, and its strong condition system.
+
+Taken together this allows us to develop, integrate and refine our
+pattern and transformation language in an explorative way without
+needing to make complex changes to a preprocessing systems, just to
+try out certain implementations of a language feature.
+
+\section{Transformation Approaches}
+In this section we will explore several current and historical
+approaches to the problem of tree transformation to support our design
+decisions and give insight into our own approach of attacking the
+design goal.
+
+\subsection{Previous Solutions for (XML-)Transformation}
+Documents contain content and almost always there is additional
+information about their formatting or structure. SGML is a widely used 
+international standard for describing the structure of documents. DSSSL 
+(Document Style Semantics and Specification Language) is the
+accompanying standard for describing the formatting of the structured
+text.
+
+XSL(T), as a pattern for our transformation language, is based on the
+experiences gotten by the development and application of DSSSL. Next we 
+will take a closer look at the functionality of XSLT and
+XML-query-languages to outline the base implementation patterns which 
+we will explain and use later in our implementation.
+
+\subsubsection{XML style languages - XSLT}
+To get a feeling for the XSL(T) transformation language, first off we
+will look at an example.
+
+\begin{verbatim}
+<xsl:template match="person">
+  <p>
+    <xsl:value-of select="@given-name"/>
+    <xsl:text> </xsl:text>
+    <xsl:value-of select="@family-name"/>
+  </p>
+</xsl:template>
+
+<xsl:template match="procedure">
+  <fo:block>
+    <xsl:value-of select="ancestor-or-self::*[@security][1]/@security"/>
+  </fo:block>
+  <xsl:apply-templates/>
+</xsl:template>
+\end{verbatim}
+
+XSLT uses a template based approach and dispatches the different
+templates via pattern-matching as can be seen in line 1 which defines
+a templates that matches a {\it person}-element.
+
+{\tt value-of} and {\tt copy-of} are used to access/copy the values of 
+variables and attributes. This is not the kind of destructuring
+(variable binding) we will find in other approaches but sufficient for 
+the possibilities one has in XSLT.
+
+Control flow is handled implicitly as well as in an explicit way. The
+first match is done implicitly by automatic tree traversal to find
+such a match. Further tree traversal has to be triggered explicitly via
+the {\tt <xsl:apply-templates/>} function, which is interesting to
+note since most other approaches offer either implicit {\it or}
+explicit tree walking. There is also the possibility of triggering one
+of the built-in template rules in the absence of a successful pattern
+match. 
+
+The creation of new elements in the result tree is intuitively handled
+by calls to {\tt xsl:element}, {\tt xsl:attribute} etc. or elements
+are instantiated to create a new element node if their name does not
+belong to the XSLT name-space (literal result elements).
+
+\subsubsection{Query Languages -- XML-QL, XQL}
+In this section we will take a look at XML-query languages. Query
+languages itself are not exactly transformation languages as we might
+define them for our purpose but are used for data extraction. Despite
+of this they are working quite similar to the way we think a
+transformation language should do. The examples and explanations we
+will use are taken from \cite{FSW}. The examples all work on an
+XML-document containing the usual entries for a bibliography. Details
+can be found in the above mentioned reference.
+
+We will look at a query selecting all titles of books by Addison-Wesley
+after 1991. The first example is in XML-QL:
+
+\begin{verbatim}
+CONSTRUCT <bib> {
+  WHERE 
+    <bib>
+      <book year=$y>
+        <title>$t</title>
+        <publisher><name>Addison-Wesley</name></publisher>
+      </book> 
+    </bib> IN "www.bn.com/bib.xml", 
+    $y > 1991
+  CONSTRUCT <book year=$y><title>$t</title></book>
+} </bib>
+\end{verbatim}
+
+A query in XML-QL consists of patterns and filters in the {\tt WHERE}
+clause and a constructor appearing in the {\tt CONSTRUCT} clause. In
+our case, the result contains all pairs of year and title values bound 
+to {\tt (\$y, \$t)} that satisfy the clause. The result is one {\tt
+  <bib>} element, constructed by the outer clause, which contains one
+{\tt <book>} for each book found satisfying the query pattern,
+i.e. one for each pair {\tt (\$y, \$t)}.
+
+As an contrasting example have a look at the corresponding XQL query:
+\begin{verbatim}
+document("http://www.bn.com")/bib { 
+  book[publisher/name="Addison-Wesley" and @year>1991] {
+        @year | title
+  }
+}
+\end{verbatim}
+The given example should be obvious to everybody having a basic
+knowledge of SQL.
+
+It is clear that query languages do not need to dispatch in clause
+names etc. since there is only one request at a time and we do not
+have any function and parameter definitions we have to decide to
+call.
+
+It is interesting to note that XML-QL in contrast to XQL does need a
+variable binding whereas XQL does not need such a feature.
+
+Again, at the end we have a construction phase whose definition is
+just a matter of syntax. The search over the document tree is
+transparent to the user and a non issue of the query language.
+
+\subsection{Conventional Tree Transformation Approaches}
+As we have already seen in the previous section, tree transformation
+is widely used in several fields of computer science. In fact it
+has been used since the early days of computing for example in
+compilers where the abstract syntax tree is transformed into
+executable code; often theoretically described in the form of tree
+automata and tree transducers.
+
+\subsubsection{S-Expression Transformation by the CL Macro system}
+Another interesting area where tree transformation is used, is the
+transformation of S-expressions by the Common Lisp macro system.
+\\
+
+Before discussing S-expressions in more detail let us have a look at
+two examples (which are actually just one example):
+\begin{verbatim}
+<PLAY>
+  <TITLE>The Tragedy of Richard the Third</TITLE>
+
+  <PERSONAE>
+    <TITLE>Dramatis Personae</TITLE>
+
+    <PERSONA>KING EDWARD The Fourth</PERSONA>
+
+    <PGROUP>
+      <PERSONA>EDWARD, Prince of Wales, afterwards King Edward V.</PERSONA>
+      <PERSONA>RICHARD, Duke of York</PERSONA>
+
+      <GRPDESCR>Sons to the King.</GRPDESCR>
+    </PGROUP>
+  </PERSONAE>
+</PLAY>
+\end{verbatim}
+This XML description (which is a part from a widely used example) can
+easily be represented as a S-expression which itself is nothing else
+but a tree description as a nested list. 
+\begin{verbatim}
+(play 
+  (title "The Tragedy of Richard the Third")
+  (personae
+    (title "Dramatis Personae")
+    (persona "KING EDWARD The Fourth")
+    (pgroup
+      (persona "EDWARD, Prince of Wales, afterwards King Edward V.")
+      (persona "RICHARD, Duke of York")
+      (grpdescr "Sons to the King."))))
+\end{verbatim}
+Both descriptions can interpreted as a tree like the one displayed in
+figure \ref{fig:tree}.
+\begin{figure}[!htbp]
+  \begin{center}
+    \psmatrix[colsep=1cm,rowsep=1cm]
+    &{\sf play}\\
+    {\sf title}&&{\sf personae}\\
+    {\tt PCDATA}&{\sf title}&{\sf persona}&&{\sf pgroup}\\
+    &{\tt PCDATA}&{\tt PCDATA}&{\sf persona}&{\sf persona}&{\sf grpdescr}\\
+    &&&{\tt PCDATA}&{\tt PCDATA}&{\tt PCDATA}
+    \endpsmatrix
+    \psset{arrows=-,nodesep=2pt}
+    \ncline{1,2}{2,1}
+    \ncline{1,2}{2,3}
+    \ncline{2,1}{3,1}
+    \ncline{2,3}{3,2}
+    \ncline{2,3}{3,3}
+    \ncline{2,3}{3,5}
+    \ncline{3,2}{4,2}
+    \ncline{3,3}{4,3}
+    \ncline{3,5}{4,4}
+    \ncline{3,5}{4,5}
+    \ncline{3,5}{4,6}
+    \ncline{4,4}{5,4}
+    \ncline{4,5}{5,5}
+    \ncline{4,6}{5,6}
+    \caption{The resulting tree of the XML/S-expression specification
+    \label{fig:tree}}
+  \end{center}
+\end{figure}
+The equivalence between the different representations should be
+obvious. In fact this is not a surprise since both representations,
+S-expressions and XML, were developed with the same intentions:
+external (i.e. outside a running program and its data structures)
+data representation, leading to compatible approaches with the
+possibility for data typing within S-expression as an extra feature
+(see figure \ref{fig:equiv}).
+\begin{figure}[!htbp]
+  \centering
+  \psmatrix[colsep=2cm,rowsep=2cm]
+  {\sf Lisp} && {\sf XML}\\
+  &{\sf tree}&
+  \endpsmatrix
+  \psset{arrows=->,nodesep=3pt}
+  \ncline{1,1}{2,2}
+  \ncline{1,3}{2,2}
+  \ncline[arrows=<->]{1,1}{1,3}
+  \caption{Connection between the different representation approaches
+  \label{fig:equiv}}
+\end{figure} 
+\\
+
+Transformation of S-expressions (i.e. of trees described as nested
+lists) through the Common Lisp macro system is done in the following
+stages.
+\begin{itemize}
+  \item dispatching to the different macros is done by the macro name,
+    i.e. the first element of the expression list (head element)
+  \item destructuring is performed either implicitly or explicitly
+    by {\tt destructuring-bind}.  Such positional assignments can be
+    done for arbitrary list structures.
+
+  \item the order of the transformation can be controlled by
+    explicit calls to {\tt macro-expand}
+
+    \item finally, construction of the resulting code is handled and
+      controlled by the backquote operator, enabling the programmer to
+      decide which elements have to be evaluated
+\end{itemize}
+
+The interesting aspect one should note is the similarity between the
+stages throughout the different cases of tree transformations. These
+stages will be summarised and described in the next section and will
+be the basis of our transformation engine.
+
+\subsubsection{Object-Oriented Tree Transformation}
+Since the target language for our transformer integration is an object
+oriented one, we will finally have a look at a purely object-oriented
+tree transformation approach to draw the conclusions for our
+design space. So how would one implement a tree transformer in an
+object-oriented language like Common Lisp? Remembering what we already
+know about the needed stages of a transformation one would choose
+something like the following approach.
+\\
+
+Referring again to our already used example of the Shakespeare play,
+we define at first our specialised node types/classes, one for each
+XML element type, which inherit their attributes from a generalised
+node class.
+\begin{verbatim}
+(defclass node ()
+  ((children :initarg :children :accessor node-children 
+             :initform nil)))
+
+(defclass play (node) ())
+(defclass title (node) ())
+(defclass personae (node) ())
+(defclass persona (node) ())
+(defclass pgroup (node) ())
+(defclass grpdescr (node) ())
+\end{verbatim}
+
+The following macros and functions are just syntactic sugar for
+usability convenience.
+\begin{verbatim}
+;;; A simple templating mechanism, just to ease construction
+
+(defun flattening-list (&rest args)
+  (loop for arg in args
+        nconcing (if (listp arg) arg (list arg))))
+
+(defmacro with-element (class &body child-forms)
+  `(make-instance ',class :children (flattening-list ,@child-forms)))
+
+;;; Simple mapping for recursive descent...
+
+(defun map-children (node fun)
+  (loop for child in (node-children node) 
+        collect (funcall fun child)))
+
+(defun mapappend-children (node fun)
+  (loop for child in (node-children node)
+        append (funcall fun child)))
+\end{verbatim}
+An ordinary transformation approach would be generic function based
+where the system dispatches over the node type and thus calls the
+appropriate function/method to transform this specific type of node.
+We have omitted the HTML class definitions and some of the {\tt
+  transform-...} functions since they are just copies of shown ones.
+\begin{verbatim}
+;;; Now we transform
+
+(defgeneric transform-to-html (node))
+(defgeneric transform-play-info-to-html (node))
+(defgeneric transform-personae-info-to-html (node))
+(defgeneric transform-pgroup-info-to-html (node))
+
+(defmethod transform-to-html ((node play))
+  (with-element html:html
+    (with-element html:head
+      (with-element html:title 
+       (mapappend-children node #'transform-play-info-to-html)))
+    (with-element html:body
+      (mapappend-children node #'transform-to-html))))
+
+(defmethod transform-to-html ((node title))
+  nil)
+
+(defmethod transform-to-html ((node personae))
+  (append
+   (mapappend-children node #'transform-personae-info-to-html)
+   (with-element html:ul
+    (mapappend-children node #'transform-to-html))))
+
+(defmethod transform-to-html ((node persona))
+  (with-element html:li (node-children node)))
+
+(defmethod transform-to-html ((node pgroup))
+  (with-element html:li
+   (with-element html:ul
+    (mapappend node #'transform-to-html))
+   (mapappend node #'transform-pgroup-info-to-html)))
+   
+(defmethod transform-to-html ((node grpdescr))
+  nil)
+
+(defmethod transform-play-info-to-html ((node title))
+  (with-element html:h1
+   (node-children node)))
+
+(defmethod transform-play-info-to-html ((node node))
+  nil)
+...
+\end{verbatim}
+
+Parameters are handled through class internal access methods
+(readers, getters) or slot accesses -- depending on the programming
+languages. Destructuring, especially deep destructuring, is usually not
+supported since it would conflict with the OO (data) abstraction
+concept. Due to the existence of {\tt title} nodes within different
+contexts we are forced to simulate states through the use of different
+transformation functions like {\tt transform-to-html} and {\tt
+  transform-play-info-to-html} which provide the required context for
+choosing the correct {\tt title} node transformation function.
+
+Result creation is usually handled through the language's usual object
+creation constructs (e.g. \texttt{make-instance} in Common Lisp or the
+\texttt{new} operator in Java).  In languages that provide an advanced
+macro system like Common Lisp, it is easy to create specialised macros
+(like the \texttt{with-element} macro in the example) that ease this
+task, or create simple template mechanisms.
+
+The overview given so far tries to lay out at least a part of the
+design space our transformation system will have to live in.  We will
+base our design on the object-oriented approach, since this can be
+implemented as is in Common Lisp today.  As we have seen, the more
+specialised XML transformation constructs enjoy a number of advantages
+in the areas of dispatching, destructuring and possibly control-flow.
+We will therefore start out examining some of the shortcomings of the
+object-oriented approach in more detail and present some advanced
+mechanisms that might be used to alleviate or remove those
+shortcomings.  We will then go on to show our sample implementations
+of these mechanisms in the context of Common Lisp and CLiX,
+documenting the micro design-decisions made along the way. 
+
+%% Finally we will give a short assessment of the 
+
+
+\section{Advanced mechanisms for CLiX}
+\label{sec:mechanisms}
+
+
+\subsection{Predicate Dispatching}
+\label{sec:predicate-dispatching}
+
+One of the basic problems with the object-oriented approach is the
+weakness of its dispatching mechanism:  Since dispatch is based only
+on the type of the arguments\footnote{In multiple dispatching
+  languages like Common Lisp all arguments are used for dispatching.
+  In single dispatching languages like Java or C++ only the type of
+  the (implicit) first argument is used for dispatching.}, it is for
+example not possible to take into account the outer context of a node
+directly.  So to specify different behaviour for a \texttt{title} node
+inside a \texttt{play} node and inside a \texttt{personae} node, we
+had to resort to using two different transformation generic functions:
+
+\begin{verbatim}
+(defmethod transform-play-info ((node title))
+  <bar>)
+
+(defmethod transform-personae-info ((node title))
+  <baz>)
+\end{verbatim}
+
+If we could somehow base the dispatch decision on more complex
+criteria, we would be able to specify our transformations much more
+directly, without loosing any of the advantages of the object-oriented
+approach.  Predicate dispatching (\cite{UNI,PRED}) provides just such
+a mechanism:  It bases the method dispatch on unrestricted user-supplied
+predicates on the arguments.  If we were to integrate a predicate
+dispatching algorithm into the standard Common Lisp generic function
+mechanism, then we could rewrite the above code like this:
+
+\begin{verbatim}
+(defmethod transform-play
+    ((node (and (typep node 'title)
+                (typep (node-parent node) 'play))))
+  <bar>)
+
+(defmethod transform-play
+    ((node (and (typep node 'title)
+                (typep (node-parent node) 'personae))))
+  <baz>)
+\end{verbatim}
+
+While the above code is still a bit verbose, it does indeed allow us
+to express the intent of the transformation more clearly:  We can use
+one generic function instead of two or three, since we can dispatch
+directly on the context element, instead of doing it manually.  Now we
+only need to find a way to write more concise predicates, which brings
+us to our next subject.
+
+\subsection{Pattern Matching}
+\label{sec:pattern-matching}
+
+The vast majority of the predicates we want to write down are
+what could be termed structural predicates, i.e. predicates that check
+the existence and structure of elements, sub-elements, and some of
+their properties.  Therefore it seems advisable to provide a
+descriptive short-hand notation, that is both more concise, and
+structurally similar to the structures we want to test.  Additionally,
+we want a way to easily bind variables to certain parts of the node
+structure we are currently transforming, in order to use those parts
+in the transformation and construction process.
+
+One approach that fulfils those needs is tree pattern-matching
+\cite{TPM}.  Assuming the existence of a suitable pattern-matching
+mechanism, we are able to further simplify our example code:
+
+\begin{verbatim}
+(defmethod transform-play
+    ((node (matches-p node '(path play title))))
+  <bar>)
+
+(defmethod transform-play
+    ((node (matches-p node '(path personae title))))
+  <baz>)
+\end{verbatim}
+
+While the example above is still a bit verbose, we can simplify it
+even further, if we introduce some specialised macros that are
+tailored to the uses that the combination of predicate dispatching and
+pattern matching will be put to in the context of tree transformation:
+
+\begin{itemize}
+\item If we assume that a transformation generic function takes only
+  one argument\footnote{In Common Lisp this is not as large a
+    restriction as it would be in other languages, since possibly
+    needed further context can be passed around through dynamically
+    scoped special variables, if needed.} (the node to transform), or
+  that at least only one node will take part in dispatching, we can
+  reduce some of the verbiage introduced by specialising lambda-lists.
+\item If we restrict the predicate of a method to be always a pattern,
+  we can reduce this verbiage even more by removing the need for the
+  call to the pattern-matching engine.  
+\item If we make the single argument to the transformation anonymous,
+  which is feasibly since our pattern-language will have to include
+  constructs to bind variables in any case, we can reduce the need for
+  methods to have a lambda-list completely, and can replace the
+  lambda-list with a single pattern expression.
+\end{itemize}
+
+Taking into account all of the above simplifications, and using the
+name of the method/rule-definition macro of CLiX, the example can be
+turned into the following:
+
+\begin{verbatim}
+(define-rule transform-play (bind node (path play title))
+  <bar>)
+
+(define-rule transform-play (bind node (path personae title))
+  <baz>)
+\end{verbatim}
+
+This is not noticeably more verbose than the purely object-oriented
+tree transformation approach we started out with, but is much more
+expressive and flexible, especially if we start to use more complex
+pattern expressions, so it seems we have achieved at least some of our
+goals.
+
+
+\subsection{Discussion of method ordering}
+\label{sec:methodordering}
+
+There is though a price we will have to pay for the increased power we
+gain by the combination of predicate dispatching and pattern matching,
+which we have not yet gone into:  There exists no intuitive total
+ordering on the applicable methods of a predicate dispatching-based
+transformation:
+
+\begin{itemize}
+\item \emph{Single inheritance} languages gain a simple and intuitive
+  total ordering on the applicable methods of a generic function from
+  the class inheritance hierarchy:  For two methods \texttt{a} and
+  \texttt{b} specialised on the classes \texttt{A} and \texttt{B} to
+  be applicable to one argument \texttt{arg}, the argument has to be
+  of type \texttt{A} \emph{and} of type \texttt{B}.  Given that
+  \texttt{A} $\neq$ \texttt{B}, in a single inheritance language this
+  can only be the case if one of the classes is a subclass of the
+  other, thereby providing a total ordering.\footnote{Most languages
+    will consider the method specialised on the subclass to be the
+    most specific method, but there are languages which consider the
+    method specialised on the super-class to be the most specific.}
+\item \emph{Multiple inheritance} languages extend the above ordering
+  by using the manual ordering of the super-classes of a class to
+  generate complete class precedence lists for every
+  class\footnote{While most multiple inheritance languages will differ
+    in the specific mechanism they use to generate their class
+    precedence lists, and therefore in the resulting ordering, they
+    all do provide fairly clear rules as to how they do it, so that
+    the programmer can align his expectations with the real ordering
+    fairly easily.}.
+  So if \texttt{arg} is an instance of class \texttt{C}, which is a
+  subclass of both \texttt{A} and \texttt{B}, then the applicable
+  methods \texttt{a} and \texttt{b} will be ordered according to the
+  order of \texttt{A} and \texttt{B} in the class precedence list of
+  \texttt{C}.  Since all applicable methods will be specialised on
+  classes which must be (transitive) super classes of \texttt{C},
+  their classes will be part of the class precedence list of
+  \texttt{C}, which will therefore provide a total ordering.
+\item The above discussion applies to single dispatching languages,
+  but the respective orders can be easily extended to \emph{multiple
+    dispatching} languages by putting a (possibly user supplied)
+  precedence order on the arguments of a generic function.  The
+  resulting lexicographic order is still complete.
+\item In \emph{predicate dispatching} though, we can't rely on the
+  class hierarchy to provide an ordering, since we now dispatch on
+  general expressions of the source language, and not only on type
+  tests.  Instead we have to find a generic ordering on general
+  boolean expressions of the source language.  The only intuitive
+  ordering here is that of implication:  A predicate that implies
+  another predicate is to be considered more specific.  The problem
+  with this ordering though is that it is only partial:  Just because
+  two methods \texttt{a} and \texttt{b} apply to an argument
+  \texttt{arg}, i.e. their predicates are true for \texttt{arg}, does
+  not imply that one of them generally implies the other predicate or
+  vice versa.
+\item While the restriction of predicates to patterns seems at first
+  to ease the problem, it is not clear to us how this fact can be
+  leveraged without restricting the expressive power of patterns
+  unduly.  For example the \texttt{funcall} pattern would have to be
+  eliminated, and the extensibility of the base patterns would have to
+  be restricted or eliminated.
+\end{itemize}
+
+In order to provide a simple yet half-way effective ordering on
+applicable methods, we define a simplistic metric on patterns that
+gives them precedence levels (positive integers) based on their
+complexity (basically the count of real testing patterns that must be
+met for the pattern to succeed), with a way for the user to override
+the calculated precedence of a pattern (the \texttt{precedence}
+pattern).
+
+While this approach is clearly sub-optimal, it works out quite well in
+practice, because there often is only one applicable method for any
+given argument anyway, and when there is more than one, chances are
+that one of the methods is quite a bit more complex and thus
+automatically gets the intended preferential treatment.
+
+
+\section{Variations in CL -- Putting it all together}
+\label{sec:variations}
+
+After we have given an overview of the techniques underlying the CLiX
+transformation subsystem, we will now give a detailed description of
+the actual implementation of these constructs.
+
+\subsection{Patterns in CLiX}
+\label{sec:patterns}
+
+The external representation of patterns in CLiX are S-expressions of
+the form
+
+\begin{quotation}
+  \texttt{(\textsl{pattern-name} \textsl{args} \dots)}
+\end{quotation}
+
+which we will call pattern expressions.  There are two special
+non-list pattern-expressions namely \texttt{t} and \texttt{nil}, which
+will be treated as being shorthands for \texttt{(true)} and
+\texttt{(false)} respectively.  All other pattern expressions follow
+the form given above.
+
+Before anything is done to patterns they are parsed from their pattern
+expressions into pattern objects.  This is achieved by calling the
+function \texttt{parse-pattern} on the given pattern expression.  All
+pattern objects are instances of a subclass of the \texttt{pattern}
+class and implement the following generic functions:
+
+\begin{description}
+\item[\texttt{parse-pattern-clause (keyword \&rest args)}]\hspace{2cm}\\
+  This is invoked by \texttt{parse-pattern} to parse the arguments of
+  a pattern expression with a pattern-name of \texttt{keyword}.  It
+  returns the newly created pattern object.
+\item[\texttt{unparse-pattern (pattern)}]\hspace{2cm}\\
+  This takes a pattern object and produces the corresponding pattern
+  expression.
+\item[\texttt{pattern-equal (pattern1 pattern2)}]\hspace{2cm}\\
+  Takes two pattern objects and tests for their equality based on
+  their structural identity.
+\item[\texttt{pattern-precedence (pattern)}]\hspace{2cm}\\
+  Returns the precedence level of the given pattern object. This is
+  used when ordering patterns based on their specificity.  A higher
+  precedence indicates a higher specificity.
+\item[\texttt{pattern-variables (pattern)}]\hspace{2cm}\\
+  Returns a list of all variable names that a pattern object might
+  possibly bind on a success match.
+\item[\texttt{pattern-match (pattern tree)}]\hspace{2cm}\\
+  Tries to match a given pattern with a given tree.  On failure it
+  will return \texttt{nil}, on success it will return three values:
+  \texttt{t} to indicate success, the result of the whole match, which
+  should be ignored, and a keyword-list of the form \texttt{(var1 val1
+    var2 val2 ...)} that contains all bindings produced by the pattern.
+\item[\texttt{pattern-code (pattern tree-var)}]\hspace{2cm}\\
+  Will return a Common Lisp form that will at runtime produce the
+  equivalent effect of calling \texttt{pattern-match} on the given
+  pattern object and tree-variable.
+\end{description}
+
+In addition to pattern expressions that correspond with the underlying
+basic pattern objects, \texttt{parse-pattern} will also (through
+methods on \texttt{parse-pattern-clause}) recognise syntactic
+extensions called pattern macros, which transform pattern expressions
+into other pattern expressions which are then recursively parsed.
+
+Pattern macros are defined with the \texttt{define-pattern-macro}
+Common Lisp macro, like the following \texttt{child-element} pattern
+macro:
+
+\begin{verbatim}
+(define-pattern-macro child-element (gi &rest patterns)
+  `(child (and1 (element ,gi) ,@patterns)))
+\end{verbatim}
+
+The defined patterns can be partitioned into basic patterns that are
+applicable to all domains, and domain-specific patterns, which in our
+case are specific to XML and its internal representation in CLiX.
+
+
+\subsubsection{Basic Patterns}
+
+The following basic patterns are currently defined in CLiX:
+
+\begin{description}
+\item[\texttt{(bind \textsl{var} \textsl{pattern})}]\hspace{2cm}\\
+  Binds the variable \texttt{\textsl{var}} to the result of its
+  sub-pattern \texttt{\textsl{pattern}}, if it matches.
+\item[\texttt{(with \textsl{value-pattern} \textsl{pattern})}]\hspace{2cm}\\
+  Tries to match its first sub-pattern
+  \texttt{\textsl{value-pattern}}.  If it matches then it tries to
+  match the result of the first sub-pattern with its second
+  sub-pattern \texttt{\textsl{pattern}}.  The result is the result of
+  the second sub-pattern, and the bindings are the bindings of both
+  sub-patterns on success.
+\item[\texttt{(precedence \textsl{num} \textsl{pattern})}]\hspace{2cm}\\
+  Modifies the precedence of the pattern it encapsulates to the one
+  provided by the user (\texttt{\textsl{num}}).
+\item[\texttt{(true)}, \texttt{(false)}]\hspace{2cm}\\
+  are constant patterns that always/never match.  Note that \texttt{t}
+  and \texttt{nil} are treated specially by the \texttt{parse-pattern}
+  code, so that they can be used as short-hands for \texttt{(true)}
+  and \textrm{(false)} respectively.
+\item[\texttt{(not \textsl{pattern})}, \texttt{(and \dots)},
+  \texttt{(and1 \dots)}, \texttt{(or \dots)}]\hspace{2cm}\\
+  are the usual (n-nary, short-circuiting) logical operators,
+  where \texttt{and-pattern} and \texttt{or-pattern} return the result
+  of the first sub-pattern that doesn't/does match, whereas
+  \texttt{and1-pattern} always returns the result of the first
+  sub-pattern.
+\item[\texttt{(typep \textsl{type})}]\hspace{2cm}\\
+  checks that the current node is of the given type.
+\item[\texttt{(funcall \textsl{fun})}]\hspace{2cm}\\
+  applies the given function object to the current tree, and matches
+  if the function returns non-nil.  The result is the result of the
+  function call.
+\end{description}
+
+
+\subsubsection{XML/CLiX-specific Patterns}
+
+\begin{description}
+\item[\texttt{(child \textsl{pattern})}]\hspace{2cm}\\
+  checks for the existence of a direct child that matches the
+  sub-pattern \texttt{\textsl{pattern}}.
+\item[\texttt{(parent \textsl{pattern})}]\hspace{2cm}\\
+ checks for the existence of a direct parent that matches the
+ sub-pattern \texttt{\textsl{pattern}}.
+\item[\texttt{(descendant \textsl{pattern})}]\hspace{2cm}\\
+  checks for the existence of a direct or transitive child that
+  matches the sub-pattern \texttt{\textsl{pattern}}.
+\item[\texttt{(ancestor \textsl{pattern})}]\hspace{2cm}\\
+ checks for the existence of a direct or transitive parent that
+ matches the sub-pattern \texttt{\textsl{pattern}}.
+\item[\texttt{(every-child \textsl{pattern})}]\hspace{2cm}\\
+  checks that every direct child matches the given pattern.  The
+  result is the set of all children.
+\item[\texttt{(every-descendant \textsl{pattern})}]\hspace{2cm}\\
+  checks that every descendant matches the given pattern.  The result
+  is the set of all descendants.
+\item[\texttt{(some-child \textsl{pattern})}]\hspace{2cm}\\
+  collects every direct child that matches the given pattern.
+\item[\texttt{(some-descendant \textsl{pattern})}]\hspace{2cm}\\
+  collects every descendant that matches the given pattern.
+\item[\texttt{(element-pcdata \textsl{pattern})}]\hspace{2cm}\\
+  descends into the pcdata content of an element node and tries to
+  match the sub-pattern \texttt{\textsl{pattern}} against it.
+\item[\texttt{(element \textsl{gi})}]\hspace{2cm}\\
+  tests whether the given node is an element with the given GI.  Works
+  on both \texttt{generic-element} and \texttt{specialized-element}
+  nodes.
+\item[\texttt{(attribute \textsl{name} \textsl{pattern})}]\hspace{2cm}\\
+  tests whether the given node is an element and has an attribute of
+  the given name.  Then tries to match the sub-pattern against the
+  attribute value string of the given attribute.
+\item[\texttt{(substring \textsl{substring})}]\hspace{2cm}\\
+  tests whether the current node is a string and if it contains the
+  given substring.
+\end{description}
+
+
+\subsubsection{XML/CLiX-specific Pattern Macros}
+
+The following pattern macros are intended as samples of
+domain-specific utility macros that could be defined on top of the
+basic and XML-specific patterns.
+
+\begin{description}
+\item[\texttt{(text \textsl{pattern})}]\hspace{2cm}\\
+  If \texttt{\textsl{pattern}} matches, then this pattern matches and
+  returns the pcdata content of the result of
+  \texttt{\textsl{pattern}}.
+\item[\texttt{(child-element \textsl{gi} \dots)}]\hspace{2cm}\\
+  This pattern macro matches if the current node has an element child
+  with the given GI that matches all of the given sub-patterns.  The
+  result is the matching element child.
+\item[\texttt{(parent-element \textsl{gi} \dots)}]\hspace{2cm}\\
+  This is the equivalent of \texttt{child-element} but checks for the
+  direct parent of the current node.
+\item[\texttt{(path \dots)}]\hspace{2cm}\\
+  This is an example of a more complex pattern macro that covers a
+  very common test:  The path pattern macro tests the element GIs of
+  a part of the path that was used to reach the current node.
+  Each argument to the path macro tests one element in the path to the
+  node, with the first argument testing the uppermost node in the
+  partial path anchored at the node, and the last argument testing the
+  node itself.  Each argument is of the form \texttt{gi} or 
+  \texttt{(var gi)}, where the former only tests for the given GI,
+  whereas the later also binds a variable \texttt{var} to the tested
+  element node.  The result of the macro is the current node, i.e. the
+  node matched by the last argument.
+\item[\texttt{(cpath \dots)}]\hspace{2cm}\\
+  This is the child-equivalent of the \texttt{path} macro:  Whereas
+  the former checks for a path of ancestors anchored at the current
+  node, the \texttt{cpath} macro checks for descendants anchored at
+  the current node.  The syntax of the arguments is identical, with
+  the first argument matching the current node, and succeeding
+  elements checking for the existence of successive children with the
+  given GIs.  The result of the macro is the current node, i.e. the
+  node matched by the first argument.
+\end{description}
+
+
+\subsection{Simple Pattern-Matching constructs}
+\label{sec:simple}
+
+The following constructs provide basic access to the pattern matcher
+in code that does not wish to employ the predicate-dispatching
+transformation system.
+
+\begin{description}
+\item[\texttt{with-pattern-match
+    (\textsl{pattern-spec} \textsl{tree}\&body \textsl{body})}]
+  \hspace{2cm}\\[2ex]
+  This is the most basic construct of employing the pattern matcher:
+  It tries to match the pattern specified by the
+  \texttt{\textsl{pattern-spec}} pattern expression against the tree
+  that results by evaluating \texttt{\textsl{tree}}.  If it matches
+  then the body of the macro is evaluated in an implicit
+  \texttt{progn} in an environment where all the variables of the
+  pattern are lexically bound according to the match.  If there is no
+  match, then the macro returns \texttt{nil} and the body is not
+  evaluated.
+\item[\texttt{pattern-case (\textsl{tree} \&rest \textsl{clauses})}]
+  \hspace{2cm}\\[2ex]
+  This macro evaluates the expression given by \texttt{tree} and then
+  tries to match the result against the clauses in order.  Each clause
+  is of the form 
+  \begin{quote}
+    \texttt{(\textsl{pattern-spec} . \textsl{body})}
+  \end{quote}
+  If the pattern specified by the pattern expression
+  \texttt{\textsl{pattern-spec}} matches the given tree, then the body
+  of the clause is evaluated as an implicit \texttt{progn} in an
+  environment where the variables of the pattern match are lexically
+  bound, and the result of this is returned from the
+  \texttt{pattern-case} construct.  If the pattern doesn't match then
+  the next clause is tried in turn.  If there is no next clause then
+  \texttt{nil} is returned from the \texttt{pattern-case} construct.
+\end{description}
+
+
+\subsection{Predicate Dispatching constructs}
+\label{sec:pred}
+
+The following constructs are used to define specialised predicate
+dispatching transformations:  A transformation is a specialised kind
+of generic functions (see \cite{CLOS,AMOP}) that takes one argument
+and dispatches on this argument based on the patterns of its rules,
+i.e. the dispatch happens as if each rule was specialised on the
+following predicate 
+\begin{quote}
+  \texttt{(pattern-match (rule-pattern \textsl{rule}) \textsl{tree})}
+\end{quote}
+where \texttt{\textsl{rule}} is the corresponding rule object and
+\texttt{\textsl{tree}} is the implicit tree argument.
+
+Each rule consists of a pattern and a body.  Of all rules of a
+transformation the most specific rule that matches will be executed,
+i.e. its body will be executed in a lexical environment where all the
+bindings of the pattern are in effect.
+
+Rule specificity is judged according to pattern precedence,
+i.e. the rule with the pattern with the highest precedence is
+considered to be the most specific rule.  If no rule is applicable to
+a given argument, then an error of type
+\texttt{transformation-failure} will be signalled. 
+
+The body of a rule can decline to handle an argument by invoking
+\texttt{fail-rule}, which will cause the dispatching to resume as if
+the current rule hadn't matched in the first place.
+
+\begin{description}
+\item[\texttt{define-transformation
+    (\textsl{name} \&rest \textsl{options})}]
+  \hspace{2cm}\\[2ex]
+  Defines a transformation of the given name.  All options are passed
+  on to the call of \texttt{make-instance} on the
+  \texttt{transformation} meta-object that represents the
+  transformation.  At the current moment in time no officially
+  supported options are defined.
+\item[\texttt{define-rule
+    (\textsl{name} \texttt{pattern-spec} \&body \textsl{body})}]
+  \hspace{2cm}\\[2ex]
+  Defines a rule on the previously defined transformation
+  \texttt{\textsl{name}}.  The rule's pattern is specified by the
+  pattern expression \texttt{\textsl{pattern-spec}}, and its body is
+  the given \texttt{\textsl{body}}.
+\item[\texttt{fail-rule ()}]\hspace{2cm}\\[2ex]
+  This macro is only defined in the body of a rule.  If it is invoked
+  then the dispatch of the rule's transformation is restarted with the
+  same argument at the rule following the current rule.
+\end{description}
+
+
+\subsubsection{Implementation details}
+
+When we said earlier that a transformation is a specialised kind of
+generic functions, this was not strictly true, and in any case wasn't
+the whole truth.  To explain the exact nature of transformations and
+their rules, we will have to transcend into the depths of the
+Metaobject Protocol (or short MOP), which is a layered de-facto
+standard specified in \cite{AMOP}.  It defines the protocols that
+underly most implementations of CLOS, the Common Lisp Object System
+defined as part of the ANSI Common Lisp standard \cite{ANSI}.  We
+refer the reader to \cite{CLOS} and \cite{AMOP} for an introduction
+into CLOS, metaobject protocols and the MOP for Common Lisp.
+
+In CLOS under the Metaobject Protocol, generic functions are instances
+of the metaobject class \texttt{standard-generic-function}, which is
+itself directly derived from \texttt{generic-function} and
+transitively from \texttt{funcallable-standard-object}.  The metaclass
+of \texttt{standard-generic-function} is
+\texttt{funcallable-standard-class}.
+
+A transformation in CLiX is an instance of the \texttt{transformation}
+metaobject class,  which is derived from
+\texttt{funcallable-standard-object} directly, i.e. it does not
+inherit from \texttt{generic-function}, but from its superclass.  Like
+\texttt{standard-generic-function} it has
+\texttt{funcallable-standard-class} as its metaclass.
+
+The instances of all classes that are instances of
+\texttt{funcallable-standard-class} are objects that can be invoked
+like normal functions, e.g. by \texttt{funcall} and \texttt{apply}.
+Furthermore they can be put into the function cell of a symbol, and
+can be used as the function definition of a global symbol in this
+way.  Therefore \texttt{define-transformation} makes a new instance of
+\texttt{transformation} via \texttt{make-instance}, and installs it in
+the function cell of the given symbol at runtime.
+
+The real function that is invoked When a funcallable instance like
+the instances of \texttt{transformation} is invoked can be set by
+\texttt{set-funcallable-instance-function}, a function defined by the
+MOP.  The dispatch function that is installed by an after method on
+\texttt{initialize-instance} for \texttt{transformation} objects is
+constructed by a method defined on the generic function
+\texttt{transformation-function}.  This dispatch function takes care
+of the actual predicate dispatching and invoking the pattern matching
+engine.
+
+The rules of a transformation are instances of the \texttt{rule}
+metaobject class.  They are just simple wrappers around the pattern
+object and body closure that are created by the macro expansion of
+\texttt{define-rule}.  The body closure takes as its arguments the
+key-value list of bound variables of its pattern, and contains the
+body forms of the rule definition, wrapped in a local
+\texttt{macrolet} to establish the \texttt{fail-rule} macro.
+
+\texttt{define-rule} arranges for an instance of \texttt{rule} to be
+created at load-time with the parsed pattern and body closure, and
+added to the corresponding transformation object by a call to the
+generic function \texttt{transformation-add-rule}.  Methods on this
+functions ensure that rules with \texttt{pattern-equal} patterns are
+superseded, and that all rules are kept in the \texttt{rules} slot of
+a transformation ordered on the precedence of their pattern objects.
+
+
+\subsubsection{A small transformation example}
+
+The code fragments reproduced below define the transformation
+\texttt{transform-play} which extracts and transforms some of the
+title information of an XML document conforming to the Text Encoding
+Initiative's PLAY DTD that we have used in examples before into HTML.
+The code demonstrates not only the predicate dispatching constructs,
+but also a number of pattern constructs, and the templating constructs
+that are part of CLiX.  The only code that is omitted is the code that
+defines the specialised elements for HTML and the TEI PLAY DTD, and
+some code to set up package structures, etc.
+
+\begin{verbatim}
+;;; Support utility functions
+
+(defun map-children (fun node)
+  (loop for child in (node-children node)
+        for value = (funcall fun child)
+        append (if (listp value) value (list value))))
+
+;;; The transformation proper
+
+(define-transformation transform-play)
+
+(define-rule transform-play (and (bind node (element tei:play))
+                                 (bind title (text (child-element tei:title))))
+  (with-element (html:html)
+    (with-element (html:head)
+      (with-element (html:title)
+        (make-instance 'pcdata :text title)))
+    (with-element (html:body)
+      (map-children #'transform-play node))))
+
+(define-rule transform-play (bind node (path tei:play tei:title))
+  (with-element (html:h1)
+    (make-instance 'pcdata :text (element-pcdata node))))
+
+(define-rule transform-play (path tei:personae tei:title)
+  nil)
+
+(define-rule transform-play (and (bind node (element tei:personae))
+                                 (bind title (text (child-element tei:title))))
+  (list
+   (with-element (html:h2)
+     (make-instance 'pcdata :text title))
+   (with-element (html:ul)
+     (map-children #'transform-play node))))
+
+(define-rule transform-play (bind person (text (element tei:persona)))
+  (with-element (html:li)
+    (with-element (html:p)
+      (make-instance 'pcdata :text person))))
+
+(define-rule transform-play (and (bind node (element tei:pgroup))
+                                 (bind descr
+                                       (text (child-element tei:grpdescr))))
+  (with-element (html:li)
+    (with-element (html:ul)
+      (map-children #'transform-play node))
+    (with-element (html:p)
+      (make-instance 'pcdata :text descr))))
+      
+(define-rule transform-play (path tei:pgroup tei:grpdescr)
+  nil)
+
+(define-rule transform-play t
+  nil)
+
+;;; Driver code
+
+(defun transform-file (from to)
+  (let ((play-xml (parse-xml-from-file from 'tei:tei)))
+    (with-open-file (output to :direction :output)
+      (with-xml-output (output :xml-decl nil)
+        (transform-play play-xml)))))
+\end{verbatim}
+
+\section{Summary and Outlook}
+\label{sec:summary}
+
+We have examined several existing approaches to tree transformation in
+general and transformation of XML trees in particular and defined
+four areas of transformation that allow us to categorise the advanced
+functionality of these different approaches.  Starting from the
+natural approach to tree transformation in a standard object-oriented
+language, we have identified two of those areas that would require
+improvements, and put forward two mechanisms that could be integrated
+into a standard language and that would give most of the advantages of
+specialised transformation languages in those areas.  Finally we have
+designed and implemented specific instances of those mechanisms for
+integration into Common Lisp.
+
+\begin{figure}[htbp]
+  \begin{center}
+    \begin{tabular}{lr}
+      Basic patterns and pattern matcher: & 251 LoC\\
+      Constructs for predicate dispatching, \texttt{pattern-case},
+      etc.: & 112 LoC\\ 
+      XML-specific patterns and pattern macros: & 187 LoC\\
+      Basic CLiX infrastructure: & 436 LoC\\
+      \hline
+      Total: & 986 LoC
+    \end{tabular}
+    \caption{Overview of CLiX module sizes by lines of code}
+    \label{fig:loc}
+  \end{center}
+\end{figure}
+
+Thanks to the meta-linguistic features of Common Lisp, the effort
+needed to implement and embed those mechanisms proved to be quite
+small, as had been expected:  As can be seen in figure~\ref{fig:loc},
+the total amount of code for the whole transformation subsystem weighs
+in at under 600 lines of code, and less than 1000 lines of code for
+the whole CLiX system, which includes an internal generic XML
+representation with accessors (``CL-DOM''), a mechanism to define
+specialised representations for known elements (``Typed-CL-DOM''),
+code for rendering the internal representations to XML, code to
+interface with (external) XML parsers with a specific interface to
+\texttt{expat}, an XML parser library in C by James Clark, and an
+extensible XML templating mechanism.
+
+On the minus side of things we have to concede that although all of the
+implemented mechanisms are indeed quite usable and in some cases a big
+advance on the standard object-oriented approach, there are still some
+unsolved issues that cloud the rosy picture:  Especially heavily
+weighs the lack of a total ordering of rules/methods in the predicate
+dispatching constructs.  This undermines to some degree the modular
+extensibility that generic functions offer and transformations where
+intended to conserve, in contrast to the deterministic, but closed
+constructs like \texttt{pattern-case} or \texttt{with-pattern-match}.
+
+There remain a number of projects that could be undertaken to improve
+the CLiX transformation subsystem:
+
+\begin{itemize}
+\item The predicate dispatching mechanism as implemented does not use
+  any structural information of the rule patterns to optimise the
+  dispatch, by e.g. avoiding the costly reevaluation of non-matching
+  common sub-predicates, etc.  Optimisations in this area could be
+  achieved through some of the techniques in \cite{PRED}, and/or
+  simple memoization techniques.
+\item While interfaces for the compilation of pattern objects into CL
+  code have been defined, the implementation behind this has been
+  deferred, since the expected were deemed insignificant in the face
+  of missing optimisation of the predicate dispatching mechanisms.
+  Further study might highlight bottlenecks in the current
+  interpretative approach and identify suitable solutions, especially
+  when combined with advances on the previous point.
+\item More real-world usage of the system should give additional
+  insights into the usefulness of the current XML-specific patterns
+  and pattern macros and identify different and/or further patterns
+  and pattern macros that are of general interest.
+\item In case the current s-expression based syntax might prove too
+  verbose, reader macros might be developed to implement a more
+  concise surface syntax.
+\item The current set of patterns lacks a pattern that allows the
+  positional matching of the children (e.g. by regular expressions) of
+  a node.  This feature was explicitly excluded, since the exact order
+  of the different children of an element should usually not have any
+  semantic impact in XML, and should therefore not influence
+  transformations.  The practice of SGML and XML usage bears this
+  out.
+
+  In some other contexts (like e.g. the transformation of abstract
+  syntax trees in compilers), this assumption does not hold, and a
+  pattern for positional matching would be needed.
+\end{itemize}
+
+All in all we consider the project to have yielded a successful first
+cut of an integration of Common Lisp and more powerful and specialised
+transformation constructs.  Real-world usage will now determine the
+fate and future shape of the resulting transformation system.
+
+\begin{thebibliography}{99}
+\bibitem{FSW}
+  Mary Fernandez, J\`er\^ome Sim\'eon, Philip Wadler:
+  \textsl{XML Query Languages: Experiences and Exemplars}, 
+  available at\\ 
+  {\tt http://www-db.research.bell-labs.com/user/simeon/xquery.html}
+
+\bibitem{PG}
+  Paul Graham:
+  \textsl{On Lisp: Advanced Techniques for Common Lisp},
+  Prentice Hall, 1994
+
+\bibitem{PRED}
+  Craig Chambers, Weimin Chen:
+  \textsl{Efficient Multiple and Predicate Dispatching},
+  in \textsl{Proceedings of the 1999 ACM SIGPLAN Conference on
+    Object-Oriented Programming, Systems, Languages and Applications
+    (OOPSLA '99)}, 238 -- 255, 1999
+
+\bibitem{UNI}
+  Michael Ernst, Craig Kaplan, Craig Chambers:
+  \textsl{Predicate Dispatching: A Unified Theory of Dispatch}
+  in \textsl{Proceedings of ECOOP '98, the 12th European Conference on
+    Object-Oriented Programming}, 186 -- 211, 1998
+
+\bibitem{TPM}
+  Richard Cole, Ramesh Hariharan:
+  \textsl{Tree Pattern Matching and Subset Matching in
+    Randomized $O(n \log^3 m)$ Time},
+  New York University, CS Department, TR1996-731,
+  December, 1996
+
+\bibitem{ANSI}
+  X3J13 Committee:
+  \textsl{ANSI X3.226-1994, American National Standard for Information
+    Technology -- Programming Language -- Common Lisp}, ANSI, 1994
+  
+\bibitem{CLOS}
+  Sonya E. Keene:
+  \textsl{Object-Oriented Programming in Common Lisp:
+    A Programmer's Guide to CLOS},
+  Addison Wesley, 1988
+
+\bibitem{AMOP}
+  Gregor Kiczales, Jim des Rivi\`eres, Daniel G. Bobrow:
+  \textsl{The Art of the Metaobject Protocol},
+  MIT Press, 1991
+
+\end{thebibliography}
+
+\end{document}
+% LocalWords:  CLiX SGML XSLT DSSSL destructuring Mai XML HTML PostScript XSL
+% LocalWords:  CL

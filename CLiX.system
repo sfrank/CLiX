@@ -1,0 +1,55 @@
+;;;; -*-Mode: LISP; Package: CL-USER; Syntax: ANSI-Common-lisp -*-
+;;;; CLiX --- Common Lisp (improves|incorporates|infiltrates|is) XML
+;;;; This is copyrighted software.  See documentation for terms.
+;;;; 
+;;;; CLiX.system --- CLiX system definition
+;;;; 
+;;;; Checkout Tag: $Name:  $
+;;;; $Id: CLiX.system,v 1.1.1.1 2000/10/23 12:19:57 dent Exp $
+
+(in-package :MAKE)
+
+;;;; %File Description:
+;;;; 
+;;;; 
+;;;; 
+
+(defun compile-elements-module ()
+  (let ((dir #.(merge-pathnames
+		"src/parser/"
+		(make-pathname :name nil :type nil :version nil
+			       :defaults *load-truename*))))
+    (format t "~&Building elements ...~%")
+    (run-unix-program "make" (list "-C" (format nil "~A" dir)))))
+
+(defsystem "CLiX"
+    :source-pathname #.(merge-pathnames
+			"src/"
+			(make-pathname :name nil :type nil :version nil
+				       :defaults *load-truename*))
+    :source-extension "cl"
+    :components
+    ((:module "base"
+	      :source-pathname ""
+	      :components ((:file "package")))
+     (:module "main"
+	      :source-pathname "main"
+	      :components ((:file "representation")
+			   (:file "rendering" :depends-on ("representation"))
+			   (:file "specialized"
+				  :depends-on ("representation" "rendering"))
+			   (:file "generation"
+				  :depends-on ("representation" "specialized"))
+			   (:file "template"
+				  :depends-on ("generation" "rendering"))
+			   (:file "access" :depends-on ("representation")))
+	      :depends-on ("base"))
+     (:module "parser"
+	      :source-pathname "parser"
+	      :components ((:module "elements"
+				    :load-form
+				    (compile-elements-module)
+				    :compile-form
+				    (compile-elements-module))
+			   (:file "expat" :depends-on ("elements")))
+	      :depends-on ("base" "main"))))

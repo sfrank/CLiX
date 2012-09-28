@@ -1,0 +1,32 @@
+;;;; -*-Mode: LISP; Package: CL-USER; Syntax: ANSI-Common-lisp -*-
+;;;; CLiX --- Common Lisp (improves|incorporates|infiltrates|is) XML
+;;;; This is copyrighted software.  See documentation for terms.
+;;;; 
+;;;; CLiX-Transform.system --- CLiX Transformation system definition
+;;;; 
+;;;; Checkout Tag: $Name:  $
+;;;; $Id: CLiX-Transform.system,v 1.2 2000/10/26 17:27:37 dent Exp $
+
+(in-package :MAKE)
+
+;;;; %File Description:
+;;;; 
+;;;; 
+;;;; 
+
+(defsystem "CLiX-Transform"
+    :source-pathname #.(merge-pathnames
+			"src/"
+			(make-pathname :name nil :type nil :version nil
+				       :defaults *load-truename*))
+    :source-extension "cl"
+    :components
+    ((:module "transformation"
+	      :source-pathname "transformation"
+	      :components
+	      ((:file "package")
+	       (:file "pattern" :depends-on ("package"))
+	       (:file "xml-patterns" :depends-on ("package" "pattern"))
+	       (:file "matching" :depends-on ("package" "pattern"))
+	       (:file "wuja" :depends-on ("package" "pattern")))))
+    :depends-on ("CLiX"))
