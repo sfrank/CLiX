@@ -19,7 +19,7 @@
 			"src/"
 			(make-pathname :name nil :type nil :version nil
 				       :defaults *load-truename*))
-    :source-extension "cl"
+    :source-extension "lisp"
     :components
     ((:module "transformation"
 	      :source-pathname "transformation"
